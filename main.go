@@ -737,6 +737,13 @@ func (m model) settingsView() string {
 		Foreground(lipgloss.Color("#666666")).
 		MarginTop(2)
 
+	headingStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#888888")).
+		MarginTop(1).
+		MarginBottom(1).
+		Align(lipgloss.Center)
+
 	row := func(idx int, label string, val string) string {
 		var l, v string
 		if m.selectedSetting == idx {
@@ -761,11 +768,14 @@ func (m model) settingsView() string {
 	rows := []string{
 		titleStyle.Render("Settings"),
 		row(0, "Technique", m.technique.String()),
+		headingStyle.Render("─ Pomodoro ─"),
 		row(1, "Work Duration", fmt.Sprintf("%d min", m.workDuration)),
 		row(2, "Short Break", fmt.Sprintf("%d min", m.shortBreakDuration)),
 		row(3, "Long Break", fmt.Sprintf("%d min", m.longBreakDuration)),
+		headingStyle.Render("─ 50/10 ─"),
 		row(4, "Focus Duration", fmt.Sprintf("%d min", m.focusDuration)),
 		row(5, "Break Duration", fmt.Sprintf("%d min", m.breakDuration)),
+		headingStyle.Render("─ Other ─"),
 		row(6, "Theme", themes[m.themeIndex].name),
 		row(7, "Auto Start on Skip", autoStartStr),
 		row(8, "Auto Start Next", autoNextStr),
