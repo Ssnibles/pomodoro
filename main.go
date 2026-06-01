@@ -711,7 +711,8 @@ func (m model) settingsView() string {
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#FAFAFA")).
-		MarginBottom(2)
+		MarginBottom(2).
+		Align(lipgloss.Center)
 
 	labelStyle := lipgloss.NewStyle().
 		Width(24).
@@ -771,7 +772,7 @@ func (m model) settingsView() string {
 		helpStyle.Render("↑↓/jk navigate • ←→/hl adjust • space toggle • r reset defaults • tab/esc back • q quit"),
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	content := lipgloss.JoinVertical(lipgloss.Center, rows...)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
