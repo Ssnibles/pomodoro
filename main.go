@@ -30,6 +30,23 @@ const (
 	settingsScreen
 )
 
+type techniqueType int
+
+const (
+	pomodoroTechnique techniqueType = iota
+	focusTechnique
+)
+
+func (t techniqueType) String() string {
+	switch t {
+	case pomodoroTechnique:
+		return "Pomodoro"
+	case focusTechnique:
+		return "50/10"
+	}
+	return ""
+}
+
 type theme struct {
 	name       string
 	workColor  lipgloss.Color
@@ -47,9 +64,12 @@ var themes = []theme{
 // --- Persistence ---
 
 type settingsConfig struct {
+	Technique          int  `json:"technique"`
 	WorkDuration       int  `json:"work_duration"`
 	ShortBreakDuration int  `json:"short_break_duration"`
 	LongBreakDuration  int  `json:"long_break_duration"`
+	FocusDuration      int  `json:"focus_duration"`
+	BreakDuration      int  `json:"break_duration"`
 	ThemeIndex         int  `json:"theme_index"`
 	AutoStartOnSkip    bool `json:"auto_start_on_skip"`
 	AutoStartNext      bool `json:"auto_start_next"`
@@ -87,9 +107,12 @@ func saveConfig(c settingsConfig) error {
 
 func persistFromModel(m model) {
 	_ = saveConfig(settingsConfig{
+		Technique:          int(m.technique),
 		WorkDuration:       m.workDuration,
 		ShortBreakDuration: m.shortBreakDuration,
 		LongBreakDuration:  m.longBreakDuration,
+		FocusDuration:      m.focusDuration,
+		BreakDuration:      m.breakDuration,
 		ThemeIndex:         m.themeIndex,
 		AutoStartOnSkip:    m.autoStartOnSkip,
 		AutoStartNext:      m.autoStartNext,
@@ -99,14 +122,18 @@ func persistFromModel(m model) {
 // --- Model ---
 
 type model struct {
+	technique techniqueType
+
 	workDuration       int
 	shortBreakDuration int
 	longBreakDuration  int
+	focusDuration      int
+	breakDuration      int
 
 	mode   mode
 	screen screen
 
-	selectedSetting int // 0=work, 1=short break, 2=long break, 3=theme, 4=auto start on skip, 5=auto start next
+	selectedSetting int // 0=technique, 1=work, 2=short break, 3=long break, 4=focus, 5=break, 6=theme, 7=auto start on skip, 8=auto start next
 	themeIndex      int
 	autoStartOnSkip bool
 	autoStartNext   bool
@@ -122,9 +149,12 @@ type model struct {
 
 func initialModel() model {
 	m := model{
+		technique:          pomodoroTechnique,
 		workDuration:       25,
 		shortBreakDuration: 5,
 		longBreakDuration:  15,
+		focusDuration:      50,
+		breakDuration:      10,
 		mode:               workMode,
 		screen:             timerScreen,
 		remaining:          25 * time.Minute,
@@ -137,13 +167,16 @@ func initialModel() model {
 	}
 
 	if c, err := loadConfig(); err == nil {
+		m.technique = techniqueType(max(0, min(1, c.Technique)))
 		m.workDuration = max(1, min(120, c.WorkDuration))
 		m.shortBreakDuration = max(1, min(60, c.ShortBreakDuration))
 		m.longBreakDuration = max(1, min(60, c.LongBreakDuration))
+		m.focusDuration = max(1, min(120, c.FocusDuration))
+		m.breakDuration = max(1, min(60, c.BreakDuration))
 		m.themeIndex = max(0, min(len(themes)-1, c.ThemeIndex))
 		m.autoStartOnSkip = c.AutoStartOnSkip
 		m.autoStartNext = c.AutoStartNext
-		m.remaining = time.Duration(m.workDuration) * time.Minute
+		m.remaining = m.currentModeDuration()
 		m.sessionDuration = m.remaining
 	}
 
@@ -273,7 +306,7 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "down", "j":
-		if m.selectedSetting < 5 {
+		if m.selectedSetting < 8 {
 			m.selectedSetting++
 		}
 
@@ -281,6 +314,13 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		save = true
 		switch m.selectedSetting {
 		case 0:
+			m.technique = focusTechnique
+			m.mode = workMode
+			m.remaining = m.currentModeDuration()
+			m.sessionDuration = m.remaining
+			m.running = false
+			m.completedCycles = 0
+		case 1:
 			if m.workDuration < 120 {
 				m.workDuration++
 			}
@@ -288,7 +328,7 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.remaining = time.Duration(m.workDuration) * time.Minute
 				m.sessionDuration = m.remaining
 			}
-		case 1:
+		case 2:
 			if m.shortBreakDuration < 60 {
 				m.shortBreakDuration++
 			}
@@ -296,7 +336,7 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.remaining = time.Duration(m.shortBreakDuration) * time.Minute
 				m.sessionDuration = m.remaining
 			}
-		case 2:
+		case 3:
 			if m.longBreakDuration < 60 {
 				m.longBreakDuration++
 			}
@@ -304,13 +344,29 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.remaining = time.Duration(m.longBreakDuration) * time.Minute
 				m.sessionDuration = m.remaining
 			}
-		case 3:
+		case 4:
+			if m.focusDuration < 120 {
+				m.focusDuration++
+			}
+			if m.technique == focusTechnique && m.mode == workMode && !m.running {
+				m.remaining = time.Duration(m.focusDuration) * time.Minute
+				m.sessionDuration = m.remaining
+			}
+		case 5:
+			if m.breakDuration < 60 {
+				m.breakDuration++
+			}
+			if m.technique == focusTechnique && m.mode == shortBreakMode && !m.running {
+				m.remaining = time.Duration(m.breakDuration) * time.Minute
+				m.sessionDuration = m.remaining
+			}
+		case 6:
 			if m.themeIndex < len(themes)-1 {
 				m.themeIndex++
 			}
-		case 4:
+		case 7:
 			m.autoStartOnSkip = !m.autoStartOnSkip
-		case 5:
+		case 8:
 			m.autoStartNext = !m.autoStartNext
 		}
 
@@ -318,6 +374,13 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		save = true
 		switch m.selectedSetting {
 		case 0:
+			m.technique = pomodoroTechnique
+			m.mode = workMode
+			m.remaining = m.currentModeDuration()
+			m.sessionDuration = m.remaining
+			m.running = false
+			m.completedCycles = 0
+		case 1:
 			if m.workDuration > 1 {
 				m.workDuration--
 			}
@@ -325,7 +388,7 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.remaining = time.Duration(m.workDuration) * time.Minute
 				m.sessionDuration = m.remaining
 			}
-		case 1:
+		case 2:
 			if m.shortBreakDuration > 1 {
 				m.shortBreakDuration--
 			}
@@ -333,7 +396,7 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.remaining = time.Duration(m.shortBreakDuration) * time.Minute
 				m.sessionDuration = m.remaining
 			}
-		case 2:
+		case 3:
 			if m.longBreakDuration > 1 {
 				m.longBreakDuration--
 			}
@@ -341,22 +404,49 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.remaining = time.Duration(m.longBreakDuration) * time.Minute
 				m.sessionDuration = m.remaining
 			}
-		case 3:
+		case 4:
+			if m.focusDuration > 1 {
+				m.focusDuration--
+			}
+			if m.technique == focusTechnique && m.mode == workMode && !m.running {
+				m.remaining = time.Duration(m.focusDuration) * time.Minute
+				m.sessionDuration = m.remaining
+			}
+		case 5:
+			if m.breakDuration > 1 {
+				m.breakDuration--
+			}
+			if m.technique == focusTechnique && m.mode == shortBreakMode && !m.running {
+				m.remaining = time.Duration(m.breakDuration) * time.Minute
+				m.sessionDuration = m.remaining
+			}
+		case 6:
 			if m.themeIndex > 0 {
 				m.themeIndex--
 			}
-		case 4:
+		case 7:
 			m.autoStartOnSkip = !m.autoStartOnSkip
-		case 5:
+		case 8:
 			m.autoStartNext = !m.autoStartNext
 		}
 
 	case " ":
 		save = true
 		switch m.selectedSetting {
-		case 4:
+		case 0:
+			if m.technique == pomodoroTechnique {
+				m.technique = focusTechnique
+			} else {
+				m.technique = pomodoroTechnique
+			}
+			m.mode = workMode
+			m.remaining = m.currentModeDuration()
+			m.sessionDuration = m.remaining
+			m.running = false
+			m.completedCycles = 0
+		case 7:
 			m.autoStartOnSkip = !m.autoStartOnSkip
-		case 5:
+		case 8:
 			m.autoStartNext = !m.autoStartNext
 		}
 
@@ -366,13 +456,18 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if resetDefaults {
+		m.technique = pomodoroTechnique
 		m.workDuration = 25
 		m.shortBreakDuration = 5
 		m.longBreakDuration = 15
+		m.focusDuration = 50
+		m.breakDuration = 10
 		m.themeIndex = 0
 		m.autoStartOnSkip = false
 		m.autoStartNext = false
 		m.running = false
+		m.mode = workMode
+		m.completedCycles = 0
 		m.remaining = m.currentModeDuration()
 		m.sessionDuration = m.remaining
 	}
@@ -385,6 +480,20 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) nextMode() model {
+	if m.technique == focusTechnique {
+		switch m.mode {
+		case workMode:
+			m.completedCycles++
+			m.mode = shortBreakMode
+			m.remaining = time.Duration(m.breakDuration) * time.Minute
+		case shortBreakMode:
+			m.mode = workMode
+			m.remaining = time.Duration(m.focusDuration) * time.Minute
+		}
+		m.sessionDuration = m.remaining
+		return m
+	}
+
 	switch m.mode {
 	case workMode:
 		m.completedCycles++
@@ -404,6 +513,16 @@ func (m model) nextMode() model {
 }
 
 func (m model) currentModeDuration() time.Duration {
+	if m.technique == focusTechnique {
+		switch m.mode {
+		case workMode:
+			return time.Duration(m.focusDuration) * time.Minute
+		case shortBreakMode:
+			return time.Duration(m.breakDuration) * time.Minute
+		}
+		return 0
+	}
+
 	switch m.mode {
 	case workMode:
 		return time.Duration(m.workDuration) * time.Minute
@@ -416,6 +535,16 @@ func (m model) currentModeDuration() time.Duration {
 }
 
 func (m model) modeLabel() string {
+	if m.technique == focusTechnique {
+		switch m.mode {
+		case workMode:
+			return "Focus"
+		case shortBreakMode:
+			return "Break"
+		}
+		return ""
+	}
+
 	switch m.mode {
 	case workMode:
 		return "Focus"
@@ -458,6 +587,11 @@ func (m model) timerView() string {
 		Foreground(color).
 		MarginTop(1).
 		MarginBottom(1).
+		Align(lipgloss.Center)
+
+	techniqueStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		MarginBottom(0).
 		Align(lipgloss.Center)
 
 	timerBoxStyle := lipgloss.NewStyle().
@@ -525,31 +659,51 @@ func (m model) timerView() string {
 			lipgloss.NewStyle().Foreground(lipgloss.Color("#666666")).Render(fmt.Sprintf(" %3d%%", pct)),
 		))
 
-	// Cycle indicators (4 per set)
-	totalSets := (m.completedCycles / 4) + 1
-	currentInSet := m.completedCycles % 4
-	var cycleB strings.Builder
-	for i := 0; i < 4; i++ {
-		if i < currentInSet {
-			cycleB.WriteString(lipgloss.NewStyle().Foreground(color).Render("●"))
-		} else {
-			cycleB.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("●"))
+	// Cycle indicators
+	var cycleLine string
+	if m.technique == pomodoroTechnique {
+		totalSets := (m.completedCycles / 4) + 1
+		currentInSet := m.completedCycles % 4
+		var cycleB strings.Builder
+		for i := 0; i < 4; i++ {
+			if i < currentInSet {
+				cycleB.WriteString(lipgloss.NewStyle().Foreground(color).Render("●"))
+			} else {
+				cycleB.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("●"))
+			}
+			if i < 3 {
+				cycleB.WriteString(" ")
+			}
 		}
-		if i < 3 {
-			cycleB.WriteString(" ")
+		cycleLine = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#666666")).
+			MarginBottom(1).
+			Render(fmt.Sprintf("Set %d   %s", totalSets, cycleB.String()))
+	} else {
+		var cycleB strings.Builder
+		for i := 0; i < 4; i++ {
+			if i < m.completedCycles%4 {
+				cycleB.WriteString(lipgloss.NewStyle().Foreground(color).Render("●"))
+			} else {
+				cycleB.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("●"))
+			}
+			if i < 3 {
+				cycleB.WriteString(" ")
+			}
 		}
+		cycleLine = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#666666")).
+			MarginBottom(1).
+			Render(fmt.Sprintf("Cycle %d   %s", m.completedCycles+1, cycleB.String()))
 	}
-	cycleLine := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#666666")).
-		MarginBottom(1).
-		Render(fmt.Sprintf("Set %d   %s", totalSets, cycleB.String()))
 
+	techniqueLine := techniqueStyle.Render(m.technique.String())
 	title := titleStyle.Render(m.modeLabel())
 	timer := timerBoxStyle.Render(timerText)
 	statusLine := statusStyle.Render(fmt.Sprintf("%s  •  Cycle %d", status, m.completedCycles+1))
 	help := helpStyle.Render("space start/pause   +/- 1min   r reset   s skip   tab settings   q quit")
 
-	content := lipgloss.JoinVertical(lipgloss.Center, title, timer, barLine, statusLine, cycleLine, help)
+	content := lipgloss.JoinVertical(lipgloss.Center, techniqueLine, title, timer, barLine, statusLine, cycleLine, help)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
@@ -605,12 +759,15 @@ func (m model) settingsView() string {
 
 	rows := []string{
 		titleStyle.Render("Settings"),
-		row(0, "Work Duration", fmt.Sprintf("%d min", m.workDuration)),
-		row(1, "Short Break", fmt.Sprintf("%d min", m.shortBreakDuration)),
-		row(2, "Long Break", fmt.Sprintf("%d min", m.longBreakDuration)),
-		row(3, "Theme", themes[m.themeIndex].name),
-		row(4, "Auto Start on Skip", autoStartStr),
-		row(5, "Auto Start Next", autoNextStr),
+		row(0, "Technique", m.technique.String()),
+		row(1, "Work Duration", fmt.Sprintf("%d min", m.workDuration)),
+		row(2, "Short Break", fmt.Sprintf("%d min", m.shortBreakDuration)),
+		row(3, "Long Break", fmt.Sprintf("%d min", m.longBreakDuration)),
+		row(4, "Focus Duration", fmt.Sprintf("%d min", m.focusDuration)),
+		row(5, "Break Duration", fmt.Sprintf("%d min", m.breakDuration)),
+		row(6, "Theme", themes[m.themeIndex].name),
+		row(7, "Auto Start on Skip", autoStartStr),
+		row(8, "Auto Start Next", autoNextStr),
 		helpStyle.Render("↑↓/jk navigate • ←→/hl adjust • space toggle • r reset defaults • tab/esc back • q quit"),
 	}
 
